@@ -3,7 +3,7 @@ package Attribute::Default;
 ####
 #### Attribute::Default
 ####
-#### $Id: Default.pm,v 1.14 2002/05/14 01:21:40 steven Exp $
+#### $Id: Default.pm,v 1.32 2002/12/23 19:56:29 steven Exp $
 ####
 #### See perldoc for details.
 ####
@@ -14,29 +14,73 @@ use warnings;
 no warnings 'redefine';
 use attributes;
 
-use base 'Attribute::Handlers';
+use base qw(Attribute::Handlers Exporter);
 
 use Carp;
+use Symbol;
 
-our $VERSION = do { my @r = (q$Revision: 1.14 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
+our $VERSION = do { my @r = (q$Revision: 1.32 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
 
+our @EXPORT_OK = qw(exsub);
 
+use constant EXSUB_CLASS => ( __PACKAGE__ . '::ExSub' );
 
+##
+## import()
+##
+## Apparently I found it necessary to export 'exsub'
+## by hand. I don't know why. Eventually, it may
+## be necessary to turn on some specific functionality
+## once 'exsub' is exported for compile-time speed.
+##
+sub import {
+  my $class = shift;
+  my ($subname) = @_;
+  my $callpkg = (caller())[0];
+
+  if (defined($subname) && $subname eq 'exsub') {
+    no strict 'refs';
+    *{ "${callpkg}::exsub" } = \&exsub;
+  }
+  else {
+    SUPER->import(@_);
+  }
+    
+}
+
+##
+## exsub()
+##
+## One specifies an expanding subroutine for Default by saying 'exsub
+## { YOUR CODE HERE }'. It's run and used as a default at runtime.
+##
+## Exsubs are marked by being blessed into EXSUB_CLASS.
+##
+sub exsub(&) {
+  my ($sub) = @_;
+  ref $sub eq 'CODE' or die "Sub '$sub' can't be blessed: must be CODE ref";
+  bless $sub, EXSUB_CLASS;
+}
+
+##
+## _get_args()
+##
+## Fairly close to no-op code. Discards the needless
+## arguments I get from Attribute::Handlers stuff
+## and puts single default arguments into array refs.
+##
 sub _get_args {
-  my ($glob, $orig, $attr, $defaults) = @_[1,2,3,4];
+  my ($glob, $orig, $attr, $defaults) = @_[1 .. 4];
   (ref $defaults && ref $defaults ne 'CODE') or $defaults = [$defaults];
 
   return ($glob, $attr, $defaults, $orig);
 }
 
-sub _sub {
-  my ($attr, $subs, $defaults) = @_;
-
-  defined $subs->{ref $defaults} or confess "Argument to attribute '$attr' must be of one of the following types: ${\( join ',', keys %$subs)}; stopped";
-  
-  return $subs->{ref $defaults};
-}
-
+##
+## _is_method()
+##
+## Returns true if the given reference has a ':method' attribute.
+##
 sub _is_method {
   my ($orig) = @_;
 
@@ -47,54 +91,207 @@ sub _is_method {
   return;
 }
 
-sub Default : ATTR(CODE) {
-  my ($glob, $attr, $defaults, $orig) = _get_args(@_);
-  
-  if ( _is_method($orig) ) {
-    *$glob = _sub($attr, {
-			  ARRAY => sub {
-			    @_ = ( $_[0], _fill_arr($defaults, @_[ $[ + 1 .. $#_ ]) );
-			    goto $orig;
-			  },
-			  HASH => sub {
-			    @_ = ($_[0], _fill_hash($defaults, @_[ $[ + 1 .. $#_ ]));
-			    goto $orig;
-			  },
-			 }, $defaults);
+##
+## _extract_exsubs_array()
+##
+## Arguments:
+##    DEFAULTS -- arrayref : The list of default arguments
+##
+## Returns:
+##    hashref: list of exsubs we found and their array indices
+##    arrayref: list of defaults without exsubs
+##
+sub _extract_exsubs_array {
+  my ($defaults) = @_;
+
+  my %exsubs = ();
+  my @noexsubs = ();
+
+  for ( $[ .. $#$defaults ) {
+    if (UNIVERSAL::isa( $defaults->[$_], EXSUB_CLASS )) {
+      $exsubs{$_} = $defaults->[$_];
+    }
+    else {
+      $noexsubs[$_] = $defaults->[$_];
+    }
+  }
+
+  return (\%exsubs, \@noexsubs);
+}
+
+
+##
+## _get_fill()
+##
+## Returns an appropriate subroutine to process the given defaults.
+##
+sub _get_fill {
+  my ($defaults) = @_;
+
+  if (ref $defaults eq 'ARRAY') {
+    return _fill_array_sub($defaults);
+  }
+  elsif(ref $defaults eq 'HASH') {
+    return _fill_hash_sub($defaults);
   }
   else {
-    *$glob = _sub($attr, {
-			  ARRAY => sub {
-			    @_ = _fill_arr($defaults, @_);
-			    goto $orig;
-			  },
-			  HASH => sub {
-			    @_ = _fill_hash($defaults, @_);
-			    goto $orig;
-			  },
-			 }, $defaults);
+    return _fill_array_sub([$defaults]);
+  }
+}
+
+##
+## _fill_array_sub()
+##
+## Arguments:
+##   DEFAULTS: arrayref
+##
+##
+## Returns:
+##    coderef-- closure to fill sub with defaults
+##    coderef-- closure to fill in exsubs
+##
+sub _fill_array_sub {
+  my ($defaults) = @_;
+
+  my ($exsubs, $plain) = _extract_exsubs_array($defaults);
+  my $fill_sub = sub { return _fill_arr($plain, @_) };
+  if ( %$exsubs ) {
+      return ( $fill_sub,
+	       sub {
+		 my ($processed, $exsub_args) = @_;
+		 while (my ($idx, $exsub) = each %$exsubs) {
+		   defined( $processed->[$idx] ) and next;
+		   $processed->[$idx] = &$exsub(@$exsub_args);
+		 }
+		 return $processed;
+	       });
+    }
+  else {
+    return ($fill_sub, undef);
+  }
+}
+
+##
+## _extract_exsubs_hash()
+##
+## Arguments:
+##
+##   DEFAULTS: hashref -- Name-value pairs of defaults
+##
+## Returns: (array)
+##
+##   hashref -- name-value pairs of all exsubs
+##   hashref -- name-value pairs of all non-exsub defaults
+##
+## Returns the exsubs in a hash of defaults.
+##
+sub _extract_exsubs_hash {
+  my ($defaults) = @_;
+
+  my %exsubs = ();
+  my %noexsubs = ();
+  while ( my ($key, $value) = each %$defaults ) {
+    if (UNIVERSAL::isa( $value, EXSUB_CLASS ) ) {
+      $exsubs{$key} = $value;
+    }
+    else {
+      $noexsubs{$key} = $value;
+    }
+  }
+  return (\%exsubs, \%noexsubs);
+}
+
+##
+## _fill_hash_sub()
+##
+##  Arguments
+##    DEFAULTS: hashref -- name-value pairs of defaults
+##
+## Returns: list
+##    coderef -- closure to fill default values
+##    coderef -- closure to fill exsubs
+##
+## Returns the appropriate preprocessor to fill a hash
+## with defaults.
+##
+sub _fill_hash_sub {
+  my ($defaults) = @_;
+
+  my ($exsubs, $plain) = _extract_exsubs_hash($defaults);
+  my $fill_sub = sub { return _fill_hash($plain, @_); };
+  if ( %$exsubs ) {
+    return ($fill_sub, 
+	    sub {
+	      my ($filled, $exsub_args) = @_;
+	      my %processed = @$filled;
+	      while (my ($key, $exsub) = each %$exsubs) {
+		(! defined $processed{$key}) or next;
+		$processed{$key} = &$exsub(@$exsub_args);
+	      }
+	      @$filled = %processed;
+	      return $filled;
+	    });
+  }
+  else {
+    return ( $fill_sub, undef );
+  }
+}
+
+##
+## _get_sub()
+##
+## Arguments:
+##    DEFAULTS: arrayref -- Array of defaults to a subroutine
+##    ORIG: code ref -- The subroutine we're applying defaults to
+## 
+## Returns the appropriate subroutine wrapper that
+## will call ORIG with the given default values.
+##
+sub _get_sub {
+  my ($defaults, $orig) = @_;
+
+  my ($fill_sub, $exsub_sub) = _get_fill($defaults);
+
+  if ( _is_method($orig) ) {
+      if (defined $exsub_sub) {
+	  return sub {
+	      my ($self, @args) = @_;
+	      my @filled = &$fill_sub(@args);
+	      @_ = ($self, @{ &$exsub_sub( \@filled, [$self, @filled] ) } );
+	      goto $orig;
+	  };
+      }
+      else {
+	  return sub {
+	      my ($self, @args) = @_;
+	      @_ = ($self, &$fill_sub(@args));
+	      goto $orig;
+	  };
+      }
+  }
+  else {
+      if (defined $exsub_sub) {
+	  return sub {
+	      my @filled = &$fill_sub(@_);
+	      @_ = @{ &$exsub_sub( \@filled, \@filled ) };
+	      goto $orig;
+	  };
+      }
+      else {
+	  return sub {
+	      @_ = &$fill_sub(@_);
+	      goto $orig;
+	  };
+      }
   }
 }
 
 
-sub DefaultSub : ATTR(CODE) {
+sub Default : ATTR(CODE) {
   my ($glob, $attr, $defaults, $orig) = _get_args(@_);
-  
-  *$glob = _sub($attr, {
-		 'ARRAY' => sub {
-		   my @expanded_defaults = map { ref $_ eq 'CODE' ? &$_() : $_ } @$defaults;
-      @_ = _fill_arr(\@expanded_defaults, @_);
-		   goto $orig;
-		 },
-		 'HASH' => sub {
-		   my %expanded_defaults = %$defaults;
-		   while ( my ($key, $val) = each %expanded_defaults ) {
-		     ref $val eq 'CODE' and $expanded_defaults{$key} = &$val();
-		   }
-		   @_ = _fill_hash(\%expanded_defaults, @_);
-		   goto $orig;
-		 },
-		 }, $defaults);
+
+  *$glob = _get_sub($defaults, $orig);
+
 }
 
 
@@ -112,7 +309,14 @@ sub _fill_hash {
   my $defaults = shift;
   my %args = @_;
   while (my ($key, $value) = each %$defaults) {
-    defined($args{$key}) or $args{$key} = $value;
+    unless ( defined($args{$key}) ) {
+      if ( UNIVERSAL::isa( $value, EXSUB_CLASS ) ) {
+	$args{$key} = undef;
+      }
+      else {
+	$args{$key} = $value;
+      }
+    }
   }
   return %args;
 }
@@ -136,56 +340,124 @@ sub _fill_arr {
   if ($#$defaults > $#_) {
     push(@filled, @$defaults[scalar @_ .. $#$defaults]);
   }
-  
+
   return @filled;
-}  
-
-sub Defaults : ATTR(CODE) {
-  my ($glob, $orig, $attr, $defaults_list) = @_[1 .. 4];
-
-  ref $defaults_list eq 'ARRAY' or $defaults_list = [$defaults_list];
-  
-  my $process_defaults = sub {
-    my @args = @_;
-  ARG: foreach ($[ .. $#args ) {
-      if (! defined $args[$_]) {
-	$args[$_] = $defaults_list->[$_];
-      }
-      elsif (ref $args[$_]) {
-	if (ref $args[$_] eq 'HASH') {
-	  ref $defaults_list->[$_] eq 'HASH' or next ARG;
-	  $args[$_] = { _fill_hash( $defaults_list->[$_], %{$args[$_]} ) };
-	}
-	elsif (ref $args[$_] eq 'ARRAY') {
-	  ref $defaults_list->[$_] eq 'ARRAY' or next ARG;
-	  $args[$_] = [ _fill_arr($defaults_list->[$_], @{ $args[$_]}) ];
-	}
-	# Otherwise, it's a kind of ref we don't handle... do nothing
-	else { }
-      }
-    }
-    if ($#$defaults_list > $#_) {
-      push(@args, @$defaults_list[scalar @_ .. $#$defaults_list]);
-    }
-    return @args;
-  };
-
-  if ( _is_method($orig) ) {
-    *$glob = sub {
-      @_ = ($_[0], $process_defaults->(@_[ ($[ + 1 ) .. $#_ ]));
-      goto $orig;
-    };
-  }
-  else {
-    *$glob = sub {
-      @_ = $process_defaults->(@_);
-      goto $orig;
-    };
-  }
-
-     
 }
 
+##
+## Defaults()
+##
+## Arguments:
+##   GLOB: typeglobref -- Typeglob of name of sub to wrap
+##   ORIG: coderef -- Ref to original sub
+##   ATTR: string -- name of the attribute (Always 'Defaults' right now)
+##   DEFAULTS_LIST -- list of default arguments
+##
+## Defaults() creates a wrapper subroutine that does a two-layer check on
+## incoming arguments. It first processes the toplevel arguments as an
+## array, then processes any reference defaults.
+##
+## If the default and the argument are of differing reference types, the
+## argument is passed through unscathed.
+##
+## An undef of a reference type is treated like someone passing an empty
+## array or hash.
+##
+## Implementation note: Using huge numbers of closures like I am may
+## waste too much memory. It's a hell of a lot cleaner than what I was doing
+## before, though.
+##
+##
+sub Defaults : ATTR(CODE) {
+  my ($glob, $orig, $attr, $defaults) = @_[1 .. 4];
+  (ref $defaults) && (ref $defaults eq 'ARRAY') or $defaults = [$defaults];
+
+  my @ref_defaults = ();
+  my @ref_exsubs = ();
+  my @toplevel_defaults = ();
+
+  foreach ($[ .. $#$defaults) {
+    if ( (my $type = ref $$defaults[$_]) && (! UNIVERSAL::isa($$defaults[$_], EXSUB_CLASS) ) ) {
+      my ($fill_sub, $fill_exsub) = _get_fill($$defaults[$_]);
+      push @ref_defaults, [$_, $type, $fill_sub];
+      defined $fill_exsub and push @ref_exsubs, [$_, $type, $fill_exsub];
+    }
+    else {
+      $toplevel_defaults[$_] = $$defaults[$_];
+    }
+  }
+
+  my ($toplevel_sub, $toplevel_exsub) = _fill_array_sub(\@toplevel_defaults);
+
+  if ( _is_method($orig) ) {
+    *$glob = 
+sub {
+  my @filled = &$toplevel_sub(@_[ ($[ + 1) .. $#_ ]);
+  _fill_sublevel(\@filled, \@ref_defaults);
+  defined ($toplevel_exsub) && &$toplevel_exsub(\@filled, [$_[0], @filled]);
+  _fill_exsubs(\@filled, \@ref_exsubs, [$_[0], @filled]);
+  @_ = ($_[0], @filled);
+  goto $orig;
+}
+  }
+  else {
+      *$glob =
+ sub {
+	  
+	  # First, fill toplevel arguments
+	  my @filled = &$toplevel_sub(@_);
+	  
+	  # Next, fill all sublevel arguments
+	  _fill_sublevel(\@filled, \@ref_defaults);
+
+	  defined ($toplevel_exsub) && &$toplevel_exsub(\@filled, \@filled);
+	  _fill_exsubs(\@filled, \@ref_exsubs, \@filled);
+	  @_ = @filled;
+	  goto $orig;
+      }
+	  
+  }      
+      
+
+}
+
+sub _fill_exsubs {
+  my ($args, $ref_exsubs, $exsub_args) = @_;
+
+  foreach (@$ref_exsubs) {
+    my ($idx, $type, $exsub_sub) = @$_;
+    ($type eq ref $$args[$idx]) || (! defined $$args[$idx]) or next;
+    if ($type eq 'HASH') {
+      $$args[$idx] = { @{ &$exsub_sub( [%{ $$args[$idx] } ], $exsub_args  ) } };
+    }
+    elsif ($type eq 'ARRAY') {
+      $$args[$idx] = &$exsub_sub( $$args[$idx], $exsub_args );
+    }
+    else {
+      die "Exsub expansion cannot handle '$type'";
+    }
+  }
+}
+
+
+
+sub _fill_sublevel {
+  my ($filled, $ref_defaults) = @_;
+
+  foreach (@$ref_defaults) {
+    my ($idx, $type, $fill_sub) = @$_;
+    ($type eq ref $$filled[$idx]) || (! defined $$filled[$idx]) or next;
+    if ($type eq 'HASH') {
+      $$filled[$idx] = { &$fill_sub( defined $$filled[$idx] ? %{ $$filled[$idx] } : () ) };
+    } elsif ($type eq 'ARRAY') {
+      $$filled[$idx] = [ &$fill_sub( defined $$filled[$idx] ? @{ $$filled[$idx] } : () ) ];
+    } else {
+      die "I don't know what to do with '$type'";
+    }
+
+  }
+
+}
 
 1;
 __END__
@@ -225,7 +497,7 @@ parameters. They work fine, but every once in a while one wishes that
 perl 5 had a simple mechanism to provide default values to
 subroutines.
 
-This module attempts to fill that gap. 
+This module attempts to provide that mechanism.
 
 =head2 SIMPLE DEFAULTS
 
@@ -344,22 +616,84 @@ methods. So you can use C<Default()> and C<Defaults()> just as for regular funct
  my $ferry = Noun->new( word => 'ferry' );
  print $ferry->make_sentence('to the Statue of Liberty');
 
+=head2 EXPANDING SUBROUTINES
+
+Sometimes it's not possible to know in advance what the default should
+be for a particular argument. Instead, you'd like the default to be
+the return value of some bit of Perl code invoked when the subroutine
+is called. No problem! You can pass an expanding subroutine to the
+C<Default()> attribute using C<exsub>, like so:
+
+ use Attribute::Default 'exsub';
+ use base 'Attribute::Default';
+
+ sub log_action : Default( undef, exsub { get_time(); } ) {
+    my ($verb, $time) = @_;
+    print "$verb! That's what's happening at $time\n";
+ }
+
+Here, if $time is undef, it gets filled in with the results of
+executing get_time().
+
+Exsubs are passed the same arguments as the base subroutine on which
+they're declared, so you can use other arguments (including default
+arguments) in your exsubs, like so:
+
+ sub double : Default( 2, exsub { $_[0] * 2 }) {
+     my ($first, $second) = @_;
+
+     print "First: $first Second: $second\n";
+}
+
+ # Prints "First: 2 Second: 4"
+ double();
+
+ # Prints "First: 3 Second: 6"
+ double(3);
+
+ # Prints "First: 4 Second: 5"
+ double(4, 5);
+
+Note that this means that exsubs for methods are effectively called as methods:
+
+ package MyObject;
+
+ sub new { my $type = shift; bless [3], $type; }
+
+ sub double :method :Default( exsub { $_[0][0] * 2 } ) {
+   my $self = shift;
+   print $_[1], "\n";
+ }
+
+ my $myobject = MyObject->new();
+
+ # Prints 6
+ $myobject->double()
+
+ # Prints 4
+ $myobject->double(4);
+
+To avoid potential recursion, other exsub defaults are not passed to
+exsub arguments.
+
 =head1 BUGS
 
-An alpha module; may change. Based on (The) Damian Conway's
-Attribute::Handlers, so shares whatever bugs may be found there.
+There's an as-yet unmeasured compile time delay as Attribute::Default does its magic.
+
+Use of large numbers of default arguments to a subroutine can be a
+sign of bad design. Use responsibly.
 
 =head1 AUTHOR
 
-Stephen Nelson, E<lt>steven@jubal.comE<gt>
+Stephen Nelson, E<lt>senelson@tdl.comE<gt>
 
 =head1 SPECIAL THANKS TO
 
-Randy Ray, jeffa, and my brother and sister monks at www.perlmonks.org.
+Christine Doyle, Randy Ray, Jeff Anderson, and my brother and sister monks at www.perlmonks.org.
 
 =head1 SEE ALSO
 
-L<Attribute::Handlers>, L<Sub::NamedParams>.
+L<Attribute::Handlers>, L<Sub::NamedParams>, L<attributes>.
 
 =cut
 

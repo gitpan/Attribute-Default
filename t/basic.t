@@ -1,13 +1,16 @@
-# Before `make install' is performed this script should be runnable with
-# `make test'. After `make install' it should work as `perl test.pl'
 
+# basic.t
+#
+# Tests out basic functionality of Attribute::Default. 
+#
+# $Revision: 1.17 $
+
+use strict;
 use diagnostics;
-use lib '..';
 
 #########################
 
-use Test;
-BEGIN { plan tests => 16 };
+use Test::More tests => 14;
 use Attribute::Default;
 ok(1); # If we made it this far, we're ok.
 
@@ -20,14 +23,10 @@ ok(1); # If we made it this far, we're ok.
 
   no warnings 'uninitialized';
 
-  our @EXPORT = qw(single double hash_vals method_hash single_defs double_defs single_sub);
-    
+  our @EXPORT = qw(single double hash_vals method_hash single_defs double_defs);
+
   sub single : Default('single value') {
     return "Here I am: " . join(',', @_);
-  }
-
-  sub single_sub : DefaultSub(sub { return "3" }) {
-    return "Should be three: $_[0]";
   }
 
   sub double : Default('two', 'values') {
@@ -42,6 +41,12 @@ ok(1); # If we made it this far, we're ok.
   sub banish :method : Default({ falstaff => 'Plump Jack' }) {
     my $self = shift;
     my %args = @_;
+
+    unless ( UNIVERSAL::isa($self, __PACKAGE__) ) {
+      Test::More::diag("First argument is of incorrect package: \$self is '$self'");
+      return;
+    }
+    
     return "Banish $args{falstaff}, and banish all the world.";
   }
 
@@ -74,23 +79,19 @@ ok(1); # If we made it this far, we're ok.
 
 Attribute::Default::Test->import();
 
-ok(single(), "Here I am: single value");
-ok(single('other value'), "Here I am: other value");
-ok(double(), "Two values: two,values");
-ok(double('another', 'value'), "Two values: another,value");
-ok(double('one is different'), "Two values: one is different,values");
-ok(hash_vals(), "Val 1 is val one, val 2 is val two");
-ok(hash_vals(val2 => 'totally'), "Val 1 is val one, val 2 is totally");
+is(single(), "Here I am: single value");
+is(single('other value'), "Here I am: other value");
+is(double(), "Two values: two,values");
+is(double('another', 'value'), "Two values: another,value");
+is(double('one is different'), "Two values: one is different,values");
+is(hash_vals(), "Val 1 is val one, val 2 is val two");
+is(hash_vals(val2 => 'totally'), "Val 1 is val one, val 2 is totally");
 my $test = Attribute::Default::Test->new();
-ok($test->banish(), "Banish Plump Jack, and banish all the world.");
-ok($test->imitate(), "Prince Hal: And yet herein will I imitate the sun");
+is($test->banish(), "Banish Plump Jack, and banish all the world.");
+is($test->imitate(), "Prince Hal: And yet herein will I imitate the sun");
 
-ok(single_defs(), "Type: black, Name: darjeeling, Varietal: makaibari");
-ok(single_defs({ varietal => 'Risheehat First Flush'}), "Type: black, Name: darjeeling, Varietal: Risheehat First Flush");
-ok(single_defs("Wrong type of argument"), 'Type: , Name: , Varietal: ');
-
-ok(double_defs(), 'polonious fishmonger 3');
-ok(double_defs({item => 'hamlet'}, 'dane', [undef, 5]), 'hamlet dane 3 5');
-
-ok(single_sub(), 'Should be three: 3');
+is(single_defs(), "Type: black, Name: darjeeling, Varietal: makaibari");
+is(single_defs({ varietal => 'Risheehat First Flush'}), "Type: black, Name: darjeeling, Varietal: Risheehat First Flush");
+is(double_defs(), 'polonious fishmonger 3');
+is(double_defs({item => 'hamlet'}, 'dane', [undef, 5]), 'hamlet dane 3 5');
 

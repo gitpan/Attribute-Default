@@ -3,4 +3,6 @@ Default.pm
 Makefile.PL
 MANIFEST
 README
-test.pl
+t/basic.t
+t/exsub.t
+t/exsub_defaults.t
