@@ -3,7 +3,7 @@ package Attribute::Default;
 ####
 #### Attribute::Default
 ####
-#### $Id: Default.pm,v 1.9 2002/04/29 21:28:41 steven Exp $
+#### $Id: Default.pm,v 1.14 2002/05/14 01:21:40 steven Exp $
 ####
 #### See perldoc for details.
 ####
@@ -12,37 +12,91 @@ use 5.006;
 use strict;
 use warnings;
 no warnings 'redefine';
+use attributes;
 
 use base 'Attribute::Handlers';
 
 use Carp;
 
-our $VERSION = do { my @r = (q$Revision: 1.9 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
+our $VERSION = do { my @r = (q$Revision: 1.14 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
 
+
+
+sub _get_args {
+  my ($glob, $orig, $attr, $defaults) = @_[1,2,3,4];
+  (ref $defaults && ref $defaults ne 'CODE') or $defaults = [$defaults];
+
+  return ($glob, $attr, $defaults, $orig);
+}
+
+sub _sub {
+  my ($attr, $subs, $defaults) = @_;
+
+  defined $subs->{ref $defaults} or confess "Argument to attribute '$attr' must be of one of the following types: ${\( join ',', keys %$subs)}; stopped";
+  
+  return $subs->{ref $defaults};
+}
+
+sub _is_method {
+  my ($orig) = @_;
+
+  foreach ( attributes::get($orig) ) {
+    ($_ eq 'method') and return 1;
+  }
+
+  return;
+}
 
 sub Default : ATTR(CODE) {
-    my ($glob, $attr, $defaults) = @_[1,3,4];
-
-    ref $defaults or $defaults = [$defaults];
-
-    my $orig = *$glob{CODE};
-    if (ref $defaults eq 'ARRAY') {
-	*$glob = sub {
-	  @_ = _fill_arr($defaults, @_);
-	  goto $orig;
-	};
-    }
-    elsif (ref $defaults eq 'HASH') {
-	*$glob = sub {
-	    @_ = _fill_hash($defaults, @_);
-	    goto $orig;
-	}
-    }
-    else {
-	confess "Argument to attribute '$attr' must be an arrayref, scalar, or hashref; stopped";
-    }
-
+  my ($glob, $attr, $defaults, $orig) = _get_args(@_);
+  
+  if ( _is_method($orig) ) {
+    *$glob = _sub($attr, {
+			  ARRAY => sub {
+			    @_ = ( $_[0], _fill_arr($defaults, @_[ $[ + 1 .. $#_ ]) );
+			    goto $orig;
+			  },
+			  HASH => sub {
+			    @_ = ($_[0], _fill_hash($defaults, @_[ $[ + 1 .. $#_ ]));
+			    goto $orig;
+			  },
+			 }, $defaults);
+  }
+  else {
+    *$glob = _sub($attr, {
+			  ARRAY => sub {
+			    @_ = _fill_arr($defaults, @_);
+			    goto $orig;
+			  },
+			  HASH => sub {
+			    @_ = _fill_hash($defaults, @_);
+			    goto $orig;
+			  },
+			 }, $defaults);
+  }
 }
+
+
+sub DefaultSub : ATTR(CODE) {
+  my ($glob, $attr, $defaults, $orig) = _get_args(@_);
+  
+  *$glob = _sub($attr, {
+		 'ARRAY' => sub {
+		   my @expanded_defaults = map { ref $_ eq 'CODE' ? &$_() : $_ } @$defaults;
+      @_ = _fill_arr(\@expanded_defaults, @_);
+		   goto $orig;
+		 },
+		 'HASH' => sub {
+		   my %expanded_defaults = %$defaults;
+		   while ( my ($key, $val) = each %expanded_defaults ) {
+		     ref $val eq 'CODE' and $expanded_defaults{$key} = &$val();
+		   }
+		   @_ = _fill_hash(\%expanded_defaults, @_);
+		   goto $orig;
+		 },
+		 }, $defaults);
+}
+
 
 ##
 ## _fill_hash()
@@ -87,14 +141,13 @@ sub _fill_arr {
 }  
 
 sub Defaults : ATTR(CODE) {
-  my ($glob, $attr, $defaults_list) = @_[1,3,4];
+  my ($glob, $orig, $attr, $defaults_list) = @_[1 .. 4];
 
   ref $defaults_list eq 'ARRAY' or $defaults_list = [$defaults_list];
   
-  my $orig = *$glob{CODE};
-  *$glob = sub {
+  my $process_defaults = sub {
     my @args = @_;
-    ARG: foreach ($[ .. $#args ) {
+  ARG: foreach ($[ .. $#args ) {
       if (! defined $args[$_]) {
 	$args[$_] = $defaults_list->[$_];
       }
@@ -114,13 +167,25 @@ sub Defaults : ATTR(CODE) {
     if ($#$defaults_list > $#_) {
       push(@args, @$defaults_list[scalar @_ .. $#$defaults_list]);
     }
-    @_ = @args;
-    goto $orig;
+    return @args;
   };
 
+  if ( _is_method($orig) ) {
+    *$glob = sub {
+      @_ = ($_[0], $process_defaults->(@_[ ($[ + 1 ) .. $#_ ]));
+      goto $orig;
+    };
+  }
+  else {
+    *$glob = sub {
+      @_ = $process_defaults->(@_);
+      goto $orig;
+    };
+  }
 
-      
+     
 }
+
 
 1;
 __END__
@@ -134,17 +199,21 @@ Attribute::Default - Perl extension to assign default values to subroutine argum
   package MyPackage;
   use base 'Attribute::Default';
 
-  # Makes person's name default to "jimmy"
-  sub introduce : Default("jimmy") {
+  # Makes person's name default to "Jimmy"
+  sub introduce : Default("Jimmy") {
      my ($name) = @_;
      print "My name is $name\n";
   }
+  # prints "My name is Jimmy"
+  introduce();
 
   # Make age default to 14, sex default to male
   sub vitals : Default({age => 14, sex => 'male'}) {
      my %vitals = @_;
      print "I'm $vitals{'sex'}, $vitals{'age'} years old, and am from $vitals{'location'}\n";
   }
+  # Prints "I'm male, 14 years old, and am from Schenectady"
+  vitals(location => 'Schenectady');
 
 
 =head1 DESCRIPTION
@@ -241,6 +310,40 @@ If an argument reference's type does not match an expected default
 type, then it is passed along without any attempt at defaulting.
 
 
+=head2 DEFAULTING METHOD ARGUMENTS
+
+If you are performing object-oriented programming, you can use the
+C<:method> attribute to mark your function as a method. The
+C<Default()> and C<Defaults()> attributes ignore the first argument (in
+other words, the 'type' or 'self' argument) for functions marked as
+methods. So you can use C<Default()> and C<Defaults()> just as for regular functions, like so:
+
+ package Thing;
+ use base 'Noun';
+
+ sub new :method :Default({ word => 'train' }) {
+    my $type = shift;
+    my %args = @_;
+
+    my $self = [ $args->{'word'} ];
+    bless $self, $type;
+ }
+
+ sub make_sentence :method :Default('to another state') {
+    my $self = shift;
+    my ($phrase) = @_;
+
+    return "I took a " . $self->[0] . " $phrase"
+ }
+
+ # prints "I took a train to another state"
+ my $train = Noun->new();
+ print $train->make_sentence();
+
+ # prints "I took a ferry to the Statue of Liberty"
+ my $ferry = Noun->new( word => 'ferry' );
+ print $ferry->make_sentence('to the Statue of Liberty');
+
 =head1 BUGS
 
 An alpha module; may change. Based on (The) Damian Conway's
@@ -250,9 +353,13 @@ Attribute::Handlers, so shares whatever bugs may be found there.
 
 Stephen Nelson, E<lt>steven@jubal.comE<gt>
 
+=head1 SPECIAL THANKS TO
+
+Randy Ray, jeffa, and my brother and sister monks at www.perlmonks.org.
+
 =head1 SEE ALSO
 
-L<Attribute::Handlers>.
+L<Attribute::Handlers>, L<Sub::NamedParams>.
 
 =cut
 
