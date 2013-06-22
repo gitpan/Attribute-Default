@@ -2,7 +2,7 @@
 #
 # Tests out expanding subroutines.
 #
-# $Revision: 1.4 $
+# $Revision$
 #
 
 use strict;

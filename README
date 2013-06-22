@@ -1,37 +1,13 @@
-Attribute/Default
-=================
 
-You've probably seen it a thousand times: a subroutine begins with a
-complex series of "defined($blah) or $blah = 'fribble'" statements
-designed to provide reasonable default values for optional
-parameters. They work fine, but every once in a while one wishes that
-perl 5 had a simple mechanism to provide default values to
-subroutines.
 
-This module attempts to fill that gap. It allows you to declare your
-subroutines with an attribute which you can use to specify whatever
-default values your subroutine should have, and automatically fills
-them in if they are undefined or not provided. It works on simple
-scalar arguments, list arguments, references, and hash-style named arguments.
+This archive contains the distribution Attribute-Default,
+version 1.33:
 
-INSTALLATION
+  Perl extension to assign default values to subroutine arguments
 
-To install this module type the following:
+This software is copyright (c) 2013 by Stephen Nelson.
 
-   perl Makefile.PL
-   make
-   make test
-   make install
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself.
 
-DEPENDENCIES
-
-This module requires these other modules and libraries:
-
-   Attribute::Handlers
-
-COPYRIGHT AND LICENCE
-
-Released under the Perl Artistic License. All files in this
-distribution may be distributed and modified under the same terms as
-Perl itself.
 

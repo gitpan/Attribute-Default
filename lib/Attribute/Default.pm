@@ -1,25 +1,27 @@
 package Attribute::Default;
+{
+  $Attribute::Default::VERSION = '1.33';
+}
 
 ####
 #### Attribute::Default
 ####
-#### $Id: Default.pm,v 1.32 2002/12/23 19:56:29 steven Exp $
+#### $Id$
 ####
 #### See perldoc for details.
 ####
 
-use 5.006;
+use 5.0010;
 use strict;
 use warnings;
 no warnings 'redefine';
 use attributes;
+use Attribute::Handlers 0.79;
 
 use base qw(Attribute::Handlers Exporter);
 
 use Carp;
 use Symbol;
-
-our $VERSION = do { my @r = (q$Revision: 1.32 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r };
 
 our @EXPORT_OK = qw(exsub);
 
@@ -288,7 +290,13 @@ sub _get_sub {
 
 
 sub Default : ATTR(CODE) {
-  my ($glob, $attr, $defaults, $orig) = _get_args(@_);
+  my ($glob, $attr, $defaults_arg, $orig) = _get_args(@_);
+  
+  my $defaults = $defaults_arg;
+  
+  if ( defined $defaults && (ref $defaults eq 'ARRAY') && ( scalar @{ $defaults } == 1 ) ) {
+  	$defaults = $defaults_arg->[0];
+  }
 
   *$glob = _get_sub($defaults, $orig);
 
@@ -498,6 +506,10 @@ perl 5 had a simple mechanism to provide default values to
 subroutines.
 
 This module attempts to provide that mechanism.
+
+B<THIS MODULE IS DEPRECATED.> I'll be providing basic bug fixes, but
+there are superior modules out there-- I'd suggest L<Method::Signatures>
+or L<Params::Validate>.
 
 =head2 SIMPLE DEFAULTS
 
