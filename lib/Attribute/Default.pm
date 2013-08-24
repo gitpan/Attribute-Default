@@ -1,6 +1,6 @@
 package Attribute::Default;
 {
-  $Attribute::Default::VERSION = '1.34';
+  $Attribute::Default::VERSION = '1.35';
 }
 
 ####
@@ -697,7 +697,7 @@ sign of bad design. Use responsibly.
 
 =head1 AUTHOR
 
-Stephen Nelson, E<lt>senelson@tdl.comE<gt>
+Stephen Nelson, E<lt>stephenenelson@mac.comE<gt>
 
 =head1 SPECIAL THANKS TO
 
